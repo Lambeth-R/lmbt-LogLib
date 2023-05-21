@@ -1,0 +1,10 @@
+*.log
+*.py
+*.exe
+*.sln
+
+*/x64/
+*/Debug/
+*/Release/
+*/Win32/
+*.user
