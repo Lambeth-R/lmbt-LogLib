@@ -1,9 +1,7 @@
 #define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
-
-#include "../Include/LogClass.h"
+#define _CRT_SECURE_NO_WARNINGS
 #include "../Include/stdafx.h"
 #include "../Include/UTF_Unocode.h"
-
 
 #include <iostream>
 #include <string>
@@ -11,6 +9,7 @@
 #include <codecvt>
 #include <locale>
 
+//In case we want this lib be inside .dll
 #pragma data_seg(".STATIC")
 std::wofstream      LogClass::s_OutputFile;
 std::string         LogClass::s_Filename;
@@ -19,6 +18,24 @@ DWORD               LogClass::s_Error;
 eLogLevels          LogClass::s_eCurLogLvl = eLogLevels::None;
 bool                LogClass::s_ConsoleFixed = false;
 #pragma data_seg()
+
+void LogClass::InitConsole()
+{
+    CONSOLE_SCREEN_BUFFER_INFO console_info;
+    auto hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!GetConsoleScreenBufferInfo(hOut, &console_info))
+    {
+        AllocConsole();
+        freopen_s((FILE**)stdin,  "CONIN$",  "r", stdin);
+        freopen_s((FILE**)stdout, "CONOUT$", "w", stdout);
+        freopen_s((FILE**)stderr, "CONOUT$", "w", stderr);
+    }
+    if (hOut && hOut != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(hOut);
+        hOut = nullptr;
+    }
+}
 
 void LogClass::InitLogger(eLogLevels eLogLvl, const std::string& fName, eLogType eFlags)
 {
@@ -35,14 +52,12 @@ void LogClass::InitLogger(eLogLevels eLogLvl, const std::string& fName, eLogType
     {
         EraseFlag((DWORD)eLogType::File);
     }
-    std::stringstream fileName;
-    time_t now;
-    tm tmnow;
-    time(&now);
-    localtime_s(&tmnow, &now);
-    fileName << fName << string_format("%02d_%02d.log", tmnow.tm_mday, tmnow.tm_mon);
-    s_Filename = fileName.str();
-    s_OutputFile = std::wofstream(fileName.str(), std::ios::out | std::ios::binary);
+    std::stringstream file_name;
+    SYSTEMTIME sys_time;
+    GetLocalTime(&sys_time);
+    file_name << fName << string_format<char>("%02d_%02d.log", sys_time.wDay, sys_time.wMonth);
+    s_Filename = file_name.str();
+    s_OutputFile = std::wofstream(file_name.str(), std::ios::out | std::ios::binary);
 }
 
 bool LogClass::EraseFlag(DWORD flag)
@@ -141,11 +156,9 @@ LogClass::~LogClass()
 std::wstringstream& LogClass::Log(eLogLevels elvl)
 {
     m_elogLevel = elvl;
-    time_t now;
-    tm tmnow;
-    time(&now);
-    localtime_s(&tmnow, &now);
-    m_Data << GenerateAppendix()<< L"\t" << string_format("[%02d:%02d:%02d]", tmnow.tm_hour, tmnow.tm_min, tmnow.tm_sec);
+    SYSTEMTIME sys_time;
+    GetLocalTime(&sys_time);
+    m_Data << GenerateAppendix()<< L"\t" << string_format<wchar_t>(L"[%02d:%02d:%02d]", sys_time.wHour, sys_time.wMinute, sys_time.wSecond);
     return m_Data;
 }
 
@@ -168,7 +181,7 @@ void LogClass::SetConsoleUTF8()
 #if !_HAS_CXX17
 std::wostream& operator<<(std::wostream& iStream, const char* data)
 {
-    std::wstring wTemp = UTF8_Decode(data,1).c_str();
+    std::wstring wTemp = UTF8_Decode({ data }).c_str();
     iStream.write(wTemp.data(), wTemp.length());
     return iStream;
 }
@@ -176,7 +189,7 @@ std::wostream& operator<<(std::wostream& iStream, const char* data)
 std::wostream& operator<<(std::wostream& iStream, const char data)
 {
     std::string tString; tString.append(1, data);
-    std::wstring wTemp = UTF8_Decode(tString.data(), tString.length()).c_str();
+    std::wstring wTemp = UTF8_Decode({ tString.data(), tString.length()}).c_str();
     iStream.write(wTemp.data(), wTemp.length());
     return iStream;
 }
@@ -195,14 +208,14 @@ std::wostream& operator<<(std::wostream& iStream, const wchar_t data)
     return iStream;
 }
 #else
-std::wostream& operator<<(std::wostream& iStream, const std::string_view iaString)
+std::wostream& operator<<(std::wostream& iStream, std::string_view iaString)
 {
     const std::wstring& wTemp = UTF8_Decode(iaString);
     iStream.write(wTemp.data(), wTemp.length());
     return iStream;
 }
 
-std::wostream& operator<<(std::wostream& iStream, const std::wstring_view iwString)
+std::wostream& operator<<(std::wostream& iStream, std::wstring_view iwString)
 {
     iStream.write(iwString.data(), iwString.length());
     return iStream;

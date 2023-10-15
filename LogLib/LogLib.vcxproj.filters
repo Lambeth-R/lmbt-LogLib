@@ -9,7 +9,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="LogClass.h">
+    <ClInclude Include="..\Include\LogClass.h">
       <Filter>Headers</Filter>
     </ClInclude>
   </ItemGroup>
