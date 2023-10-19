@@ -1,6 +1,7 @@
 #define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
-#include "../Include/stdafx.h"
+#include "../Include/Common.h"
+#include "../Include/LogClass.h"
 #include "../Include/UTF_Unocode.h"
 
 #include <iostream>
