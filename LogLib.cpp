@@ -1,65 +1,29 @@
 #define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
 
-#define MODULE_NAME L"Logger"
-
 #include "../Include/Common.h"
-#include "../Include/LogClass.h"
-#include "../Include/UTF_Unocode.h"
+#include "../Include/FsLib.h"
+#include "../Include/LogLib.h"
+#include "../Include/StringConvertLib.h"
 
 #include <codecvt>
 #include <iomanip>
 #include <iostream>
 #include <locale>
-#include <string>
 
-#if FEATURE_STATIC_LINKING == 1
-#pragma data_seg(".STATIC")
-#endif
-LogClass::CallbackEx    LogClass::s_Callback        = {};
-std::wofstream          LogClass::s_OutputFile      = {};
-LogClass::LogLevel      LogClass::s_CurLogLvl       = LogLevel_None;
-LogClass::LogType       LogClass::s_LogFlags        = LogType_None;
-#if FEATURE_STATIC_LINKING == 1
-#pragma data_seg()
-#endif
-
-std::wstring ParseLastError()
+std::wstring LogLocation::FormatInfo() const
 {
-    const auto last_error = GetLastError();
-    std::wstringstream wss;
-    wss << PARSE_ERROR(last_error);
-    return wss.str();
-}
-
-std::wstring ForamtSystemMessage(const uint32_t messageId) noexcept
-{
-    const DWORD curr_last_err = GetLastError();
-    DWORD lang_id = 0;
-
-    wchar_t* inner_allocated_buf = nullptr;
-    MakeScopeGuard([=]() {
-        if (inner_allocated_buf)
-        {
-            LocalFree(inner_allocated_buf);
-        }});
-
-    const int ret = GetLocaleInfoEx(
-        LOCALE_NAME_SYSTEM_DEFAULT, 
-        LOCALE_ILANGUAGE | LOCALE_RETURN_NUMBER,
-        reinterpret_cast<LPWSTR>(&lang_id),
-        sizeof(lang_id) / sizeof(wchar_t)
-    );
-
-    if (ret == 0)
+    std::wstring result(file_path);
+    auto fname_off = result.find_last_of(L'\\');
+    if (fname_off != std::wstring::npos)
     {
-        lang_id = 0;
+        result = result.substr(fname_off + 1);
     }
-
-    const DWORD ret_size = FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-        nullptr, messageId, lang_id, (wchar_t*) &inner_allocated_buf, 0, nullptr);
-    SetLastError(curr_last_err);
-    return std::wstring(inner_allocated_buf, static_cast<const size_t>(ret_size) - 2);
+    result += L"|";
+    result += func_name;
+    result += L":";
+    result += line;
+    return result;
 }
 
 #pragma region ConsoleColor
@@ -111,9 +75,12 @@ const std::wstring ConsoleColor::SetColors(const std::wstring& iStream, int16_t 
 
 void LogClass::SetConsoleUTF8()
 {
+
     std::locale loc(std::locale(), new std::codecvt<wchar_t, char, std::mbstate_t>(".65001"));
     std::wcout.imbue(loc);
-    if (SetConsoleOutputCP(65001))
+
+    setlocale(LC_ALL, ".65001");
+    if (SetConsoleOutputCP(CP_UTF8))
     {
         HANDLE handleOut = GetStdHandle(STD_OUTPUT_HANDLE);
         DWORD consoleMode;
@@ -143,11 +110,12 @@ void LogClass::InitConsole()
     }
 }
 
-void LogClass::InitLogger(LogLevel eLogLvl, LogType eFlags, const std::string &fName, const CallbackEx &callback)
+void LogClass::InitLogger(LogLevel eLogLvl, LogType eFlags, const std::wstring &fName, Log_Callback callback)
 {
 #ifndef USE_LOGGER
     return;
 #endif
+    auto &logger_ctx = GetContext();
     if (eFlags & LogType_Print)
     {
         SetConsoleUTF8();
@@ -156,54 +124,47 @@ void LogClass::InitLogger(LogLevel eLogLvl, LogType eFlags, const std::string &f
     {
         eFlags ^= LogType_File;
     }
-    if (eFlags & LogType_File && s_OutputFile.is_open())
-    {
-        s_OutputFile.close();
-    }
     if (eFlags & LogType_File)
     {
-        std::stringstream file_name;
-        SYSTEMTIME sys_time;
-        GetLocalTime(&sys_time);
-        file_name << fName << string_format<char>("%02d_%02d.log", sys_time.wDay, sys_time.wMonth);
-        s_OutputFile = std::wofstream(file_name.str(), std::ios::out | std::ios::binary);
+        std::wstringstream file_name;
+        const auto &t = std::time(nullptr);
+        const auto tm = std::localtime(&t);
+        file_name << fName << std::put_time(tm, L"%Od_%Om") << L".log";
+        logger_ctx.OutputFile = file_name.str();
+        Fs_WriteFile(logger_ctx.OutputFile, std::vector<uint8_t>());
     }
     if (eFlags & LogType_Callback)
     {
-        s_Callback = callback;
+        logger_ctx.Callback = callback;
     }
-    s_CurLogLvl = eLogLvl;
-    s_LogFlags = eFlags;
+    logger_ctx.CurLogLvl = eLogLvl;
+    logger_ctx.LogFlags = eFlags;
 }
 
 void LogClass::DumpPtr(const std::string& dumpName, void* ptr, size_t dumpSize)
 {
     std::stringstream file_name;
-    SYSTEMTIME sys_time;
-    GetLocalTime(&sys_time);
-    file_name << dumpName << string_format<char>("%02d_%02d.bin", sys_time.wDay, sys_time.wMonth);
-    auto oStream = std::ofstream(file_name.str(), std::ios::out | std::ios::binary);
-    oStream.write(static_cast<char*>(ptr), dumpSize);
-    if (oStream.bad())
-    {
-        LOGPRINT(LogClass::LogLevel_Error, L"Failed to dump data");
-    }
-    oStream.flush();
-    oStream.close();
+    const auto &t = std::time(nullptr);
+    const auto tm = std::localtime(&t);
+    file_name << dumpName << std::put_time(tm, "%Od_%Om") << ".bin";
+    const auto casted_data = std::vector<uint8_t>(static_cast<uint8_t *>(ptr), static_cast<uint8_t *>(ptr) + dumpSize);
+    Fs_WriteFile(file_name.str(), casted_data);
 }
 
 LogClass::~LogClass()
 {
-    if (m_LogLevel > s_CurLogLvl)
+    const auto &logger_ctx = GetContext();
+
+    if (m_LogLevel > logger_ctx.CurLogLvl)
     {
         return;
     }
     m_Data << std::endl;
-    if (s_LogFlags & LogType_Debug)
+    if (logger_ctx.LogFlags & LogType_Debug)
     {
         OutputDebugStringW(m_Data.str().c_str());
     }
-    if (s_LogFlags & LogType_Print)
+    if (logger_ctx.LogFlags & LogType_Print)
     {
         std::wcout << ConsoleColor::SetColors(m_Data.str(), (uint16_t)ConsoleColor::Lvl_to_Color(m_LogLevel));
     }
@@ -212,42 +173,32 @@ LogClass::~LogClass()
         std::wcout.clear(0);
         fputwc(L'\n', stdout);
     }
-    if (s_LogFlags & LogType_File)
+    if (logger_ctx.LogFlags & LogType_File)
     {
-        if (s_OutputFile.is_open())
+        if (!Fs_AppendFile(logger_ctx.OutputFile, m_Data.str()))
         {
-            std::wstring tData(m_Data.str().c_str());
-            s_OutputFile.write(tData.data(), tData.length());
-            s_OutputFile.flush();
-            if (s_OutputFile.bad())
-            {
-                OutputDebugStringW(L"Problem with file or/and locals.\n");
-            }
-        }
-        else
-        {
-            OutputDebugStringW(L"Warning!! Logger is not initilized!");
+            OutputDebugStringW(L"Filed to produce output log into file.");
         }
     }
-    if (s_LogFlags & LogType_Callback && s_Callback.callback != nullptr)
+    if (logger_ctx.LogFlags & LogType_Callback && logger_ctx.Callback != nullptr)
     {
-        (*s_Callback.callback)(s_Callback.callbackEx, m_Data.str());
+        logger_ctx.Callback(m_Data.str());
     }
 }
 
 std::wstringstream& LogClass::Log(LogClass::LogLevel elvl)
 {
     m_LogLevel = elvl;
-    SYSTEMTIME sys_time;
-    GetLocalTime(&sys_time);
-    m_Data << GenerateAppendix() << L"\t" << string_format<wchar_t>(L"[%02d:%02d:%02d]", sys_time.wHour, sys_time.wMinute, sys_time.wSecond);
+    const auto &t = std::time(nullptr);
+    const auto tm = std::localtime(&t);
+    m_Data << GenerateAppendix() << std::put_time(tm, L"%T");
     return m_Data;
 }
 
-std::wstringstream& LogClass::LogPrint(LogLevel elvl, const wchar_t* moduleName, const wchar_t* format, ...)
+std::wstringstream& LogClass::LogPrint(LogLevel elvl, const LogLocation &locationInfo, const wchar_t* format, ...)
 {
     auto &wss = Log(elvl);
-    wss << moduleName;
+    wss << locationInfo.FormatInfo();
     va_list args_list;
     __crt_va_start(args_list, format);
     wss << L" " << string_format_l<wchar_t>(format, args_list);
@@ -255,10 +206,10 @@ std::wstringstream& LogClass::LogPrint(LogLevel elvl, const wchar_t* moduleName,
     return wss;
 }
 
-#if _HAS_CXX17
+#if _CPP_VERSION >= 201703L
 std::wostream& operator<<(std::wostream& iStream, std::string_view iaString)
 {
-    const std::wstring& wTemp = UTF8_Decode(iaString);
+    const std::wstring& wTemp = ConvertUTF::UTF8_Decode(iaString);
     iStream.write(wTemp.data(), wTemp.length());
     return iStream;
 }
@@ -272,7 +223,7 @@ std::wostream& operator<<(std::wostream& iStream, std::wstring_view iwString)
 
 std::wostream& operator<<(std::wostream& iStream, const char* data)
 {
-    std::wstring wTemp = UTF8_Decode({ data }).c_str();
+    std::wstring wTemp = ConvertUTF::UTF8_Decode({ data }).c_str();
     iStream.write(wTemp.data(), wTemp.length());
     return iStream;
 }
@@ -280,7 +231,7 @@ std::wostream& operator<<(std::wostream& iStream, const char* data)
 std::wostream& operator<<(std::wostream& iStream, const char data)
 {
     std::string tString; tString.append(1, data);
-    std::wstring wTemp = UTF8_Decode({ tString.data(), tString.length() }).c_str();
+    std::wstring wTemp = ConvertUTF::UTF8_Decode({ tString.data(), tString.length() }).c_str();
     iStream.write(wTemp.data(), wTemp.length());
     return iStream;
 }
@@ -299,32 +250,43 @@ std::wostream& operator<<(std::wostream& iStream, const wchar_t data)
     return iStream;
 }
 
+std::wostream& operator<<(std::wostream& iStream, const std::vector<uint8_t> &data)
+{
+    return iStream.write((wchar_t*)data.data(), data.size());
+}
+
+std::wostream& operator<<(std::wostream& iStream, const LogLocation &location)
+{
+    const auto &location_str = location.FormatInfo();
+    return iStream.write(location_str.data(), location_str.size());
+}
+
 const wchar_t* LogClass::GenerateAppendix() const
 {
     switch (m_LogLevel)
     {
     case LogLevel_Error:
     {
-        return L"{Err}";
+        return L"[Err]";
     }
     case LogLevel_Warning:
     {
-        return L"{Wrn}";
+        return L"[Wrn]";
     }
     case LogLevel_Info:
     {
-        return L"{Inf}";
+        return L"[Inf]";
     }
     case LogLevel_Debug:
     {
-        return L"{Dbg}";
+        return L"[Dbg]";
     }
     case LogLevel_All:
     case LogLevel_None:
     default:
         break;
     }
-    return L"";
+    return L"     ";
 }
 
 #pragma endregion
