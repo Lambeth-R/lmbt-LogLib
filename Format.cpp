@@ -18,7 +18,6 @@ static HMODULE ParseError_FACILITY_NS()
     return nullptr;
 }
 
-
 static const std::wstring ForamtMessage(const uint32_t messageId, const DWORD langId)
 {
     wchar_t *inner_allocated_buf = nullptr;
@@ -131,7 +130,7 @@ static const std::wstring ForamtMessage(const uint32_t messageId, const DWORD la
 }
 
 LIB_EXPORT
-const std::wstring ForamtSystemMessage(const uint32_t messageId) noexcept
+std::wstring ForamtSystemMessage(const uint32_t messageId) noexcept
 {
     const DWORD curr_last_err = GetLastError();
     DWORD lang_id = 0;
@@ -151,14 +150,6 @@ const std::wstring ForamtSystemMessage(const uint32_t messageId) noexcept
     SetLastError(curr_last_err);
     //std::wstring(inner_allocated_buf, static_cast<const size_t>(ret_size) - 2);
     return {};
-}
-
-std::wstring ParseLastError()
-{
-    const auto last_error = GetLastError();
-    std::wstringstream wss;
-    wss << last_error << L" " << ForamtSystemMessage(last_error).data();
-    return wss.str();
 }
 
 #endif
